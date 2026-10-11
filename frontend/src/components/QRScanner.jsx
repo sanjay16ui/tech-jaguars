@@ -3,8 +3,7 @@ import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { useNavigate } from 'react-router-dom';
 import { QrCode, Upload, Camera, XCircle, RefreshCw, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import axios from 'axios';
-
-const API_BASE = 'http://127.0.0.1:8000';
+import { API_BASE } from '../config/api';
 
 export default function QRScanner() {
   const [scanning, setScanning] = useState(false);

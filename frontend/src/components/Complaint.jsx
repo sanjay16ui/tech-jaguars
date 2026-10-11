@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { AlertCircle, CheckCircle, FileText, Send, Loader2 } from 'lucide-react';
-
-const API_BASE = 'http://127.0.0.1:8000';
+import { API_BASE } from '../config/api';
 
 export default function Complaint() {
   const [subject, setSubject] = useState('');

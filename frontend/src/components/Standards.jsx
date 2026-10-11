@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Search, BookOpen, AlertCircle, ArrowLeft, ArrowRight, Tag, Download } from 'lucide-react';
-
-const API_BASE = 'http://127.0.0.1:8000';
+import { API_BASE } from '../config/api';
 
 export default function Standards() {
   const [data, setData] = useState([]);
