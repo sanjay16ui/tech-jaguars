@@ -36,6 +36,32 @@ def test_lookup_empty():
     response = client.post("/api/lookup", json={"query": ""})
     assert response.status_code == 400
 
+def test_lookup_standard_match():
+    # Test standard number match
+    response = client.post("/api/lookup", json={"query": "IS 14543"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["query_type"] == "Standard Search"
+    assert data["standard"] == "IS 14543"
+    assert data["status"] == "Inconclusive"
+
+def test_lookup_standard_keyword_match():
+    # Test product title / keyword match
+    response = client.post("/api/lookup", json={"query": "Packaged Drinking Water"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["query_type"] == "Standard Search"
+    assert data["status"] == "Inconclusive"
+    assert "14543" in data["standard"] or "WATER" in data["product"].upper()
+
+def test_lookup_suspicious_unknown():
+    # Test unrecognized format / unknown standard
+    response = client.post("/api/lookup", json={"query": "XYZ-NONEXISTENT-PRODUCT-99999"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "Suspicious"
+    assert "No matching IS standard" in data["message"]
+
 def test_complaint_generate():
     response = client.post("/api/complaint/generate", json={
         "subject": "Fake ISI Mark",
@@ -48,3 +74,10 @@ def test_complaint_generate():
     assert "Fake ISI Mark" in data["draft_report"]
     assert "image1.png" in data["draft_report"]
 
+def test_get_standards():
+    response = client.get("/api/standards?page=1&limit=5")
+    assert response.status_code == 200
+    data = response.json()
+    assert "data" in data
+    assert "total" in data
+    assert len(data["data"]) <= 5

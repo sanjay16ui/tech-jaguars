@@ -4,7 +4,5 @@ python-multipart
 python-dotenv
 pillow
 groq
-sentence-transformers
 pydantic
-requests
 pytesseract

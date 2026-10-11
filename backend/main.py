@@ -7,39 +7,72 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
-import requests
-from sentence_transformers import SentenceTransformer, util
+import difflib
 from groq import Groq
-import torch
 
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'))
 
-# Sentence Transformer model
-model_name = "all-MiniLM-L6-v2"
-st_model = None
 standards_data = []
-standards_embeddings = None
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global st_model, standards_data, standards_embeddings
+def _load_standards_dataset():
+    global standards_data
     try:
-        st_model = SentenceTransformer(model_name)
-        print("Sentence Transformer loaded.")
-        
-        # Load dataset
         dataset_path = os.path.join(os.path.dirname(__file__), 'bis_dataset', 'dataset', 'real_bis_standards.json')
         if os.path.exists(dataset_path):
             with open(dataset_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 standards_data = data.get("standards", data) if isinstance(data, dict) else data
-            
-            # Create embeddings
-            texts = [f"{s.get('standard_number', '')} {s.get('full_title', '')} {s.get('product_category', '')}" for s in standards_data]
-            standards_embeddings = st_model.encode(texts, convert_to_tensor=True)
-            print(f"Loaded {len(standards_data)} standards and computed embeddings.")
+                print(f"Loaded {len(standards_data)} standards into memory.")
     except Exception as e:
-        print(f"Failed to load sentence transformer or dataset: {e}")
+        print(f"Failed to load dataset: {e}")
+
+_load_standards_dataset()
+
+def find_best_standard_match(query: str):
+    """
+    Lightweight, deterministic text & keyword matching for standards.
+    Consumes ~0 MB RAM (pure Python stdlib difflib + token overlap).
+    """
+    if not standards_data:
+        return None, 0.0
+
+    query_clean = query.strip().lower()
+    query_tokens = set(re.findall(r'\b[A-Za-z0-9]+\b', query_clean))
+
+    best_match = None
+    best_score = 0.0
+
+    for item in standards_data:
+        std_num = str(item.get("standard_number", "")).lower()
+        title = str(item.get("full_title", "")).lower()
+        cat = str(item.get("product_category", "")).lower()
+        combined_text = f"{std_num} {title} {cat}"
+
+        # 1. Exact match on standard number or contained in standard number
+        if query_clean in std_num or std_num in query_clean:
+            score = 1.0
+        else:
+            # Token overlap score
+            item_tokens = set(re.findall(r'\b[A-Za-z0-9]+\b', combined_text))
+            overlap = len(query_tokens.intersection(item_tokens))
+            token_score = overlap / max(len(query_tokens), 1)
+
+            # SequenceMatcher similarity against standard number and title
+            ratio_title = difflib.SequenceMatcher(None, query_clean, title).ratio()
+            ratio_num = difflib.SequenceMatcher(None, query_clean, std_num).ratio()
+            score = max(token_score, ratio_title, ratio_num)
+
+        if score > best_score:
+            best_score = score
+            best_match = item
+
+    return best_match, best_score
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Ensure dataset is loaded
+    if not standards_data:
+        _load_standards_dataset()
     yield
 
 app = FastAPI(lifespan=lifespan)
@@ -95,7 +128,7 @@ def lookup_identifier(req: LookupRequest):
     official_link = "https://www.manakonline.in/MANAK/ApplicationStatus"
     query_type = "Unknown"
     time_checked = datetime.utcnow().isoformat()
-    evidence_sources = ["Regex Format Validation", "BIS Standards Reference Dataset (SentenceTransformer retrieval)"]
+    evidence_sources = ["Regex Format Validation", "BIS Standards Reference Dataset (Keyword & Text Similarity Match)"]
 
     # 1. Check if it's an ISI/CM-L number
     cml_match = re.match(r'^(?:CM/L-?)?(\d{7,10})$', query.replace(' ', ''))
@@ -125,25 +158,19 @@ def lookup_identifier(req: LookupRequest):
         message = f"HUID {huid} appears to be a valid format. Please use the 'BIS Care App' or the official Hallmark portal to verify."
         official_link = "https://www.bis.gov.in/index.php/hallmarking-overview/"
     else:
-        # Fallback to Semantic Search for "Know Your Standards"
+        # Fallback to Text & Keyword Matching for "Know Your Standards"
         query_type = "Standard Search"
-        if st_model and standards_embeddings is not None and len(standards_data) > 0:
-            query_embedding = st_model.encode(query, convert_to_tensor=True)
-            cos_scores = util.cos_sim(query_embedding, standards_embeddings)[0]
-            top_result = torch.topk(cos_scores, k=1)
-            best_score = top_result.values[0].item()
-            best_idx = top_result.indices[0].item()
+        match, match_score = find_best_standard_match(query)
 
-            if best_score > 0.4:  # Threshold for a reasonable match
-                match = standards_data[best_idx]
-                is_standard = match.get("standard_number", "Unknown")
-                product_name = match.get("full_title", match.get("product_category", "Unknown Product"))
-                status = "Inconclusive"
-                message = "Found matching IS Standard based on query, but cannot verify a specific licence or product."
-            else:
-                status = "Suspicious"
-                message = "No matching IS standard or valid licence format found. The provided format does not align with known BIS structures."
-                evidence_sources = ["Regex Format Validation (Failed)", "BIS Standards Offline Match (Failed)"]
+        if match and match_score > 0.3:  # Threshold for keyword or fuzzy similarity match
+            is_standard = match.get("standard_number", "Unknown")
+            product_name = match.get("full_title", match.get("product_category", "Unknown Product"))
+            status = "Inconclusive"
+            message = "Found matching IS Standard based on query, but cannot verify a specific licence or product."
+        else:
+            status = "Suspicious"
+            message = "No matching IS standard or valid licence format found. The provided format does not align with known BIS structures."
+            evidence_sources = ["Regex Format Validation (Failed)", "BIS Standards Offline Match (Failed)"]
 
     return {
         "query": query,
