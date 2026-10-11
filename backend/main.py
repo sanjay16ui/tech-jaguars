@@ -158,8 +158,6 @@ def lookup_identifier(req: LookupRequest):
         "time_checked": time_checked
     }
 
-import cv2
-import numpy as np
 import pytesseract
 import io
 from PIL import Image, ImageDraw, ImageFont
